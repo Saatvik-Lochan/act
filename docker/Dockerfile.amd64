@@ -56,6 +56,12 @@ RUN wget -q https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.
   rm -rf /tmp/json.tar.xz && \
   echo "export NLOHMANN_JSON_DIR=$NLOHMANN_JSON_DIR" >> ~/.bashrc
 
+# Smoothe extraction
+COPY ./smoothe-env.yaml ./smoothe-requirements.txt /
+RUN . $MINICONDA_DIR/etc/profile.d/conda.sh && \
+  conda env create --file /smoothe-env.yaml && \
+  conda clean -y --all
+
 RUN echo "umask 0002" >> ~/.bashrc
 
 COPY entrypoint.sh /entrypoint.sh

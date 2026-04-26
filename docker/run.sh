@@ -19,7 +19,7 @@ fi
 USER_NAME="$(id -un)"
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
-HOST_MOUNT="$(pwd)/.."
+HOST_MOUNT="$(pwd)/../.."
 CONTAINER_MOUNT="/workspace"
 EPHEMERAL_NAME="act-rm-${USER_NAME}"
 DEFAULT_PERSISTENT_NAME="act-default-${USER_NAME}"
@@ -102,6 +102,7 @@ fi
 if [ "${PERSISTENT}" -eq 0 ]; then
     echo "Launching ephemeral container (will be removed on exit) with name ${EPHEMERAL_NAME}."
     docker run -it --rm \
+      --gpus all \
       --name "${EPHEMERAL_NAME}" \
       -v "${HOST_MOUNT}:${CONTAINER_MOUNT}:rw" \
       -w "${CONTAINER_MOUNT}" \

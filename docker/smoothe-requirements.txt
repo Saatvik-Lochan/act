@@ -1,0 +1,10 @@
+--find-links https://data.pyg.org/whl/torch-2.0.1+cu118.html
+torch-scatter
+torch-sparse
+torch-geometric
+pulp
+ortools
+graphviz
+matplotlib
+line-profiler
+numpy==1.24.4

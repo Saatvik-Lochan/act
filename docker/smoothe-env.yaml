@@ -1,0 +1,13 @@
+name: smoothe
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - pytorch=2.0.1
+  - pytorch-cuda=11.7
+  - mkl<=2024.0
+  - pip:
+      - -r smoothe-requirements.txt
