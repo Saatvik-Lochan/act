@@ -1,0 +1,7 @@
+load-rm:             (bitcvt (reshape_? ?a)) => (load-rm_? ?a)
+load-cm:             (transpose_? (bitcvt (reshape_? ?a))) => (load-cm_? ?a)
+store-rm:            (reshape_? (bitcvt ?a)) => (store-rm_? ?a)
+store-cm:            (reshape_? (bitcvt (transpose_? ?a))) => (store-cm_? ?a)
+mov:                 (copy ?a) => (mov_? ?a)
+gemm:                (dot ?a ?b) => (gemm ?a ?b)
+softmax:             (divide (exponential ?b) (broadcast_? (reduce_? (exponential ?a)))) => (softmax_? ?a)
