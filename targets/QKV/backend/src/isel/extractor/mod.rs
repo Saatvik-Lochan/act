@@ -1,3 +1,4 @@
+mod alpha;
 mod fast;
 mod lib;
 mod slow;
