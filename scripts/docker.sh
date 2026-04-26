@@ -5,9 +5,12 @@ usage() {
   cat <<'EOF'
 Usage: scripts/docker.sh --sim|--compile|--setup [-- COMMAND...]
 
-Launch the ACT Docker environment from the repository root. If COMMAND is
-provided, it is executed non-interactively inside the container; otherwise an
-interactive shell is opened.
+Launch the locally built ACT Docker environment from the repository root.
+--sim and --compile currently use the same core ACT image; the flags are kept
+for compatibility with existing root-level script usage.
+
+If COMMAND is provided, it is executed non-interactively inside the container;
+otherwise an interactive shell is opened.
 EOF
 }
 
@@ -16,6 +19,19 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ARCH="$(uname -m)"
 MODE=""
 CMD=()
+
+case "${ARCH}" in
+  x86_64)
+    IMAGE_NAME="devanshdvj/act:latest-amd64"
+    ;;
+  arm64|aarch64)
+    IMAGE_NAME="devanshdvj/act:latest-arm64"
+    ;;
+  *)
+    echo "error: unsupported architecture: ${ARCH}" >&2
+    exit 1
+    ;;
+esac
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,30 +71,19 @@ if [[ -z "${MODE}" ]]; then
 fi
 
 if [[ "${MODE}" == "setup" ]]; then
-  echo "Pulling ACT Docker images..."
-  if [[ "${ARCH}" == "aarch64" || "${ARCH}" == "arm64" ]]; then
-    docker pull devanshdvj/act-tutorials:asplos26-arm64
-    docker pull devanshdvj/act-tutorials:asplos26-amd64
-  else
-    docker pull devanshdvj/act-tutorials:asplos26-amd64
+  if docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
+    echo "Found local ACT image: ${IMAGE_NAME}"
+    exit 0
   fi
-  exit 0
-fi
-
-PLATFORM_FLAG=()
-if [[ "${ARCH}" == "aarch64" || "${ARCH}" == "arm64" ]]; then
-  if [[ "${MODE}" == "sim" ]]; then
-    IMAGE_NAME="devanshdvj/act-tutorials:asplos26-arm64"
-  else
-    IMAGE_NAME="devanshdvj/act-tutorials:asplos26-amd64"
-    PLATFORM_FLAG=(--platform linux/amd64)
-  fi
-else
-  IMAGE_NAME="devanshdvj/act-tutorials:asplos26-amd64"
+  echo "error: local ACT image not found: ${IMAGE_NAME}" >&2
+  echo "Build it with: docker/build.sh" >&2
+  exit 1
 fi
 
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
-  docker pull "${IMAGE_NAME}"
+  echo "error: local ACT image not found: ${IMAGE_NAME}" >&2
+  echo "Build it first with: docker/build.sh" >&2
+  exit 1
 fi
 
 DOCKER_ARGS=(-it --rm)
@@ -86,11 +91,11 @@ if [[ ${#CMD[@]} -gt 0 ]]; then
   DOCKER_ARGS=(-i --rm)
 fi
 
-CONTAINER_NAME="act-$(whoami)-${MODE}"
+CONTAINER_NAME="act-rm-$(id -un)-${MODE}"
 
 docker run "${DOCKER_ARGS[@]}" \
+  --gpus all \
   --name "${CONTAINER_NAME}" \
-  "${PLATFORM_FLAG[@]}" \
   -v "${REPO_ROOT}:/workspace:rw" \
   -w "/workspace" \
   -e HOST_UID="$(id -u)" \
