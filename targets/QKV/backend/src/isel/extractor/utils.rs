@@ -145,3 +145,49 @@ pub fn get_hbm_offset(hbm_offsets: &Vec<(Option<Id>, i32)>, eclass: Id) -> Optio
     }
     None
 }
+
+pub fn recexpr_to_pii(
+    egraph: &EGraph<TensorOp, TensorInfo>,
+    expr: &RecExpr<TensorOp>,
+    hbm_offsets: &Vec<(Option<Id>, i32)>,
+) -> PiiGraph {
+    let mut pii = PiiGraph::default();
+    let mut expr_to_pii: HashMap<Id, usize> = HashMap::new();
+    let mut expr_to_egraph: HashMap<Id, Id> = HashMap::new();
+
+    for (idx, enode) in expr.as_ref().iter().enumerate() {
+        let expr_id = Id::from(idx);
+
+        let mapped_enode = enode.clone().map_children(|child_expr_id| {
+            *expr_to_egraph
+                .get(&child_expr_id)
+                .expect("extracted expression is not in topological order")
+        });
+
+        let eclass = egraph
+            .lookup(mapped_enode.clone())
+            .unwrap_or_else(|| panic!("could not recover eclass for extracted enode: {:?}", mapped_enode));
+        let eclass = egraph.find(eclass);
+        expr_to_egraph.insert(expr_id, eclass);
+
+        let children: Vec<usize> = enode
+            .children()
+            .iter()
+            .map(|child_expr_id| {
+                *expr_to_pii
+                    .get(child_expr_id)
+                    .expect("child PII node missing during RecExpr conversion")
+            })
+            .collect();
+
+        let pii_id = pii.add_node(
+            mapped_enode,
+            egraph[eclass].data.clone(),
+            children,
+            get_hbm_offset(hbm_offsets, eclass),
+        );
+        expr_to_pii.insert(expr_id, pii_id);
+    }
+
+    pii
+}
