@@ -12,6 +12,10 @@ pub enum TensorOp {
     Mov(String, [Id; 1]),
     Gemm([Id; 2]),
     Softmax(String, [Id; 1]),
+    // IR-facing alpha bridge operators
+    AlphaHBM(Id),
+    AlphaD1(Id),
+    AlphaD2(Id),
     // IR operators
     OpAdd([Id; 2]),
     OpBitcvt([Id; 1]),
@@ -47,6 +51,9 @@ impl TensorOp {
             TensorOp::Mov(..) => 1,
             TensorOp::Gemm(..) => 2,
             TensorOp::Softmax(..) => 1,
+            TensorOp::AlphaHBM(..) => 1,
+            TensorOp::AlphaD1(..) => 1,
+            TensorOp::AlphaD2(..) => 1,
             TensorOp::OpAdd(..) => 2,
             TensorOp::OpBitcvt(..) => 1,
             TensorOp::OpBroadcast(..) => 1,
@@ -128,6 +135,9 @@ impl Language for TensorOp {
             TensorOp::Mov(_, ids) => LanguageChildren::as_slice(ids),
             TensorOp::Gemm(ids) => LanguageChildren::as_slice(ids),
             TensorOp::Softmax(_, ids) => LanguageChildren::as_slice(ids),
+            TensorOp::AlphaHBM(id) => std::slice::from_ref(id),
+            TensorOp::AlphaD1(id) => std::slice::from_ref(id),
+            TensorOp::AlphaD2(id) => std::slice::from_ref(id),
             TensorOp::OpAdd(ids) => LanguageChildren::as_slice(ids),
             TensorOp::OpBitcvt(ids) => LanguageChildren::as_slice(ids),
             TensorOp::OpBroadcast(_, ids) => LanguageChildren::as_slice(ids),
@@ -161,6 +171,9 @@ impl Language for TensorOp {
             TensorOp::Mov(_, ids) => LanguageChildren::as_mut_slice(ids),
             TensorOp::Gemm(ids) => LanguageChildren::as_mut_slice(ids),
             TensorOp::Softmax(_, ids) => LanguageChildren::as_mut_slice(ids),
+            TensorOp::AlphaHBM(id) => std::slice::from_mut(id),
+            TensorOp::AlphaD1(id) => std::slice::from_mut(id),
+            TensorOp::AlphaD2(id) => std::slice::from_mut(id),
             TensorOp::OpAdd(ids) => LanguageChildren::as_mut_slice(ids),
             TensorOp::OpBitcvt(ids) => LanguageChildren::as_mut_slice(ids),
             TensorOp::OpBroadcast(_, ids) => LanguageChildren::as_mut_slice(ids),
@@ -237,6 +250,15 @@ impl FromOp for TensorOp {
                 let data = op.split('_').last().unwrap();
                 let children = <[Id; 1] as LanguageChildren>::from_vec(children);
                 Ok(TensorOp::Softmax(data.to_string(), children))
+            }
+            op if op == "alpha-hbm" && children.len() == 1 => {
+                Ok(TensorOp::AlphaHBM(children[0]))
+            }
+            op if op == "alpha-d1" && children.len() == 1 => {
+                Ok(TensorOp::AlphaD1(children[0]))
+            }
+            op if op == "alpha-d2" && children.len() == 1 => {
+                Ok(TensorOp::AlphaD2(children[0]))
             }
             op if op == "add" && <[Id; 2] as LanguageChildren>::can_be_length(children.len()) => {
                 let children = <[Id; 2] as LanguageChildren>::from_vec(children);
@@ -365,6 +387,9 @@ impl std::fmt::Display for TensorOp {
             TensorOp::Mov(data, _) => write!(f, "mov[rows='{}']", data),
             TensorOp::Gemm(_) => write!(f, "gemm"),
             TensorOp::Softmax(data, _) => write!(f, "softmax[rows='{}']", data),
+            TensorOp::AlphaHBM(_) => write!(f, "alpha_hbm"),
+            TensorOp::AlphaD1(_) => write!(f, "alpha_d1"),
+            TensorOp::AlphaD2(_) => write!(f, "alpha_d2"),
             TensorOp::OpAdd(_) => write!(f, "add"),
             TensorOp::OpBitcvt(_) => write!(f, "bitcvt"),
             TensorOp::OpBroadcast(data, _) => write!(f, "broadcast[dims='{}']", data),
@@ -417,13 +442,17 @@ impl PartialEq for TensorInfo {
 impl Analysis<TensorOp> for TensorInfo {
     type Data = TensorInfo;
 
-    fn make(_egraph: &mut EGraph<TensorOp, Self>, enode: &TensorOp) -> Self::Data {
-        let mut data = TensorInfo::default();
-        data.is_const = match enode {
-            TensorOp::DetectedConst(_) => true,
-            _ => false,
-        };
-        data
+    fn make(egraph: &mut EGraph<TensorOp, Self>, enode: &TensorOp) -> Self::Data {
+        match enode {
+            TensorOp::AlphaHBM(child) | TensorOp::AlphaD1(child) | TensorOp::AlphaD2(child) => {
+                egraph[*child].data.clone()
+            }
+            TensorOp::DetectedConst(_) => TensorInfo {
+                is_const: true,
+                ..TensorInfo::default()
+            },
+            _ => TensorInfo::default(),
+        }
     }
 
     // TODO: ensure that the two eclasses have the same shape

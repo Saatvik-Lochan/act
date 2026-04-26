@@ -342,12 +342,14 @@ pub fn add_parameter(
             },
         );
 
+        let hbm_node = egraph.add(TensorOp::AlphaHBM(var_node));
+
         let mut shape_with_size = tshape.to_string();
         if dtype_size != 1 {
             shape_with_size += &format!(",{}", dtype_size);
         }
 
-        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [var_node]));
+        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [hbm_node]));
         let reshape_vec = shape_to_vec(&shape_with_size);
         egraph.set_analysis_data(
             node,
@@ -383,6 +385,8 @@ pub fn add_parameter(
             },
         );
 
+        let hbm_node = egraph.add(TensorOp::AlphaHBM(var_node));
+
         let tiled_shape = get_tiled_shape(tshape, ttile);
 
         let mut shape_with_size = tiled_shape.to_string();
@@ -390,7 +394,7 @@ pub fn add_parameter(
             shape_with_size += &format!(",{}", dtype_size);
         }
 
-        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [var_node]));
+        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [hbm_node]));
         let reshape_vec = shape_to_vec(&shape_with_size);
         egraph.set_analysis_data(
             node,
