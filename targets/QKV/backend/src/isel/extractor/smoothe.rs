@@ -41,6 +41,7 @@ pub fn smoothe_extract(
         .arg("src.train")
         .arg("--input_file")
         .arg(&input_path)
+        .arg("--acyclic")
         .current_dir(SMOOTHE_DIR)
         .env("PYTHONPATH", ".")
         .status()
@@ -48,7 +49,7 @@ pub fn smoothe_extract(
 
     assert!(status.success(), "SmoothE failed");
 
-    let solution_path = output_dir.join("smoothe_log").join("egraph_smoothe.json");
+    let solution_path = output_dir.join("logs").join("smoothe_log").join("egraph_smoothe.json");
     let selected = read_smoothe_solution(&solution_path);
 
     selected_enodes_to_pii(egraph, root, &selected, hbm_offsets)
