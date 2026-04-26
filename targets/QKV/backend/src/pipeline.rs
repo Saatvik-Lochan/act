@@ -304,6 +304,10 @@ fn main() {
             .with_time_limit(TIME_LIMIT)
             .with_hook(move |runner| {
                 PROCESSED.lock().unwrap().clear();
+                if isel::rewrites::enforce_alpha_injectivity(&mut runner.egraph) {
+                    println!("Applied alpha injectivity unions");
+                    println!();
+                }
                 if runner.iterations.len() % N == 0 && runner.iterations.len() > 0 {
                     check_termination(best.borrow().clone(), &start, &output_path_for_hook);
                     println!(
