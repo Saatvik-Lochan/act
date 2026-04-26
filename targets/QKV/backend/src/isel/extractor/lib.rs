@@ -42,9 +42,7 @@ pub fn extract(
         return vec![];
     };
 
-    let output_dir =
-        std::env::var("SMOOTHE_OUTPUT_DIR").unwrap_or_else(|_| "smoothe-output".to_string());
-    let piis = vec![smoothe_extract(egraph, isa_root, hbm_offsets, output_dir)];
+    let piis = vec![smoothe_extract(egraph, isa_root, hbm_offsets)];
 
     println!("SmoothE Extractor over #nodes={}", nodes);
     println!("Number of PII graphs extracted: {}", piis.len());

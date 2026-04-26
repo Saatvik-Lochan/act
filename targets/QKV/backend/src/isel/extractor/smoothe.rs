@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::fmt::Display;
 
 use egg::*;
 use serde_json::Value;
@@ -10,21 +11,16 @@ use crate::ir::egraph::{TensorInfo, TensorOp};
 use crate::ir::pii::PiiGraph;
 use crate::isel::extractor::utils::get_hbm_offset;
 
-const SMOOTHE_DIR: &str = "../../../smoothe";
-const SMOOTHE_INPUT: &str = "egraph.json";
+const SMOOTHE_DIR: &str = "/workspace/smoothe";
+const SMOOTHE_INPUT: &str = "/workspace/egraph.json";
 
 pub fn smoothe_extract(
     egraph: &mut EGraph<TensorOp, TensorInfo>,
     root: Id,
     hbm_offsets: &Vec<(Option<Id>, i32)>,
-    output_dir: impl AsRef<Path>,
 ) -> PiiGraph {
     let root = egraph.find(root);
-    let output_dir = output_dir.as_ref();
-    fs::create_dir_all(output_dir).expect("failed to create SmoothE output directory");
-    let output_dir = output_dir
-        .canonicalize()
-        .expect("failed to canonicalize SmoothE output directory");
+    let output_dir = Path::new(SMOOTHE_DIR);
     let input_path = output_dir.join(SMOOTHE_INPUT);
 
     // Serialize egraph in egraph-serialize / extraction-gym format.
@@ -45,8 +41,6 @@ pub fn smoothe_extract(
         .arg("src.train")
         .arg("--input_file")
         .arg(&input_path)
-        .arg("--output_dir")
-        .arg(&output_dir)
         .current_dir(SMOOTHE_DIR)
         .env("PYTHONPATH", ".")
         .status()

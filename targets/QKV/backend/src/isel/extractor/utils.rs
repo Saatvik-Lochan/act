@@ -1,7 +1,8 @@
 use egg::*;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque, HashMap};
 
 use crate::ir::egraph::*;
+use crate::ir::pii::PiiGraph;
 
 /// Worklist algorithm for compile-time detection of constants.
 /// Marks e-classes as const (updates analysis data), inserts a DetectedConst enode
