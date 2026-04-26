@@ -19,7 +19,7 @@ fi
 USER_NAME="$(id -un)"
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
-HOST_MOUNT="$(pwd)/../.."
+HOST_MOUNT="$(pwd)/.."
 CONTAINER_MOUNT="/workspace"
 EPHEMERAL_NAME="act-rm-${USER_NAME}"
 DEFAULT_PERSISTENT_NAME="act-default-${USER_NAME}"

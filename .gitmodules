@@ -7,3 +7,6 @@
 [submodule "generators/backend"]
 	path = generators/backend
 	url = https://github.com/act-compiler/act-backend.git
+[submodule "smoothe"]
+	path = smoothe
+	url = https://github.com/cornell-zhang/SmoothE
