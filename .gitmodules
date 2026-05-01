@@ -1,12 +1,14 @@
 [submodule "taidl"]
 	path = taidl
-	url = https://github.com/act-compiler/taidl.git
+	url = https://github.com/Saatvik-Lochan/taidl.git
+	branch = add-alpha
 [submodule "generators/oracle"]
 	path = generators/oracle
 	url = https://github.com/act-compiler/act-oracle.git
 [submodule "generators/backend"]
 	path = generators/backend
-	url = https://github.com/act-compiler/act-backend.git
+	url = https://github.com/Saatvik-Lochan/act-backend.git
+	branch = add-alpha
 [submodule "smoothe"]
 	path = smoothe
 	url = https://github.com/cornell-zhang/SmoothE
