@@ -1,0 +1,1257 @@
+diff --git a/targets/QKV/backend/Cargo.lock b/targets/QKV/backend/Cargo.lock
+index 0355d9b..51514ac 100644
+--- a/targets/QKV/backend/Cargo.lock
++++ b/targets/QKV/backend/Cargo.lock
+@@ -19,6 +19,7 @@ name = "backend"
+ version = "0.1.0"
+ dependencies = [
+  "egg",
++ "egraph-serialize",
+  "itertools",
+  "libc",
+  "pyo3",
+@@ -71,6 +72,19 @@ dependencies = [
+  "thiserror",
+ ]
+ 
++[[package]]
++name = "egraph-serialize"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0977732fb537ace6f8c15ce160ebdda78b6502b4866d3b904e4fe752e2be4702"
++dependencies = [
++ "indexmap",
++ "once_cell",
++ "ordered-float",
++ "serde",
++ "serde_json",
++]
++
+ [[package]]
+ name = "either"
+ version = "1.15.0"
+@@ -123,6 +137,7 @@ checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
+ dependencies = [
+  "equivalent",
+  "hashbrown",
++ "serde",
+ ]
+ 
+ [[package]]
+@@ -217,6 +232,17 @@ version = "1.21.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+ 
++[[package]]
++name = "ordered-float"
++version = "5.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b7d950ca161dc355eaf28f82b11345ed76c6e1f6eb1f4f4479e0323b9e2fbd0e"
++dependencies = [
++ "num-traits",
++ "rand",
++ "serde",
++]
++
+ [[package]]
+ name = "portable-atomic"
+ version = "1.11.1"
+@@ -317,6 +343,25 @@ dependencies = [
+  "proc-macro2",
+ ]
+ 
++[[package]]
++name = "rand"
++version = "0.8.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
++dependencies = [
++ "rand_core",
++ "serde",
++]
++
++[[package]]
++name = "rand_core"
++version = "0.6.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
++dependencies = [
++ "serde",
++]
++
+ [[package]]
+ name = "raw-cpuid"
+ version = "11.5.0"
+@@ -380,6 +425,7 @@ version = "1.0.145"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+ dependencies = [
++ "indexmap",
+  "itoa",
+  "memchr",
+  "ryu",
+diff --git a/targets/QKV/backend/Cargo.toml b/targets/QKV/backend/Cargo.toml
+index 5f70f97..0b5c5e8 100644
+--- a/targets/QKV/backend/Cargo.toml
++++ b/targets/QKV/backend/Cargo.toml
+@@ -10,6 +10,7 @@ path = "src/pipeline.rs"
+ 
+ [dependencies]
+ egg = "0.10.0"
++egraph-serialize = { version = "0.3.0", features = ["serde"] }
+ itertools = "0.14.0"
+ libc = "0.2.0"
+ pyo3 = { version = "0.26.0", features = ["auto-initialize"] }
+diff --git a/targets/QKV/backend/cpp/malloc/.gitignore b/targets/QKV/backend/cpp/malloc/.gitignore
+new file mode 100644
+index 0000000..30023e6
+--- /dev/null
++++ b/targets/QKV/backend/cpp/malloc/.gitignore
+@@ -0,0 +1,2 @@
++
++build/
+diff --git a/targets/QKV/backend/src/ir/egraph.rs b/targets/QKV/backend/src/ir/egraph.rs
+index e14be82..3380b25 100644
+--- a/targets/QKV/backend/src/ir/egraph.rs
++++ b/targets/QKV/backend/src/ir/egraph.rs
+@@ -12,6 +12,10 @@ pub enum TensorOp {
+     Mov(String, [Id; 1]),
+     Gemm([Id; 2]),
+     Softmax(String, [Id; 1]),
++    // IR-facing alpha bridge operators
++    AlphaHBM(Id),
++    AlphaD1(Id),
++    AlphaD2(Id),
+     // IR operators
+     OpAdd([Id; 2]),
+     OpBitcvt([Id; 1]),
+@@ -47,6 +51,9 @@ impl TensorOp {
+             TensorOp::Mov(..) => 1,
+             TensorOp::Gemm(..) => 2,
+             TensorOp::Softmax(..) => 1,
++            TensorOp::AlphaHBM(..) => 1,
++            TensorOp::AlphaD1(..) => 1,
++            TensorOp::AlphaD2(..) => 1,
+             TensorOp::OpAdd(..) => 2,
+             TensorOp::OpBitcvt(..) => 1,
+             TensorOp::OpBroadcast(..) => 1,
+@@ -128,6 +135,9 @@ impl Language for TensorOp {
+             TensorOp::Mov(_, ids) => LanguageChildren::as_slice(ids),
+             TensorOp::Gemm(ids) => LanguageChildren::as_slice(ids),
+             TensorOp::Softmax(_, ids) => LanguageChildren::as_slice(ids),
++            TensorOp::AlphaHBM(id) => std::slice::from_ref(id),
++            TensorOp::AlphaD1(id) => std::slice::from_ref(id),
++            TensorOp::AlphaD2(id) => std::slice::from_ref(id),
+             TensorOp::OpAdd(ids) => LanguageChildren::as_slice(ids),
+             TensorOp::OpBitcvt(ids) => LanguageChildren::as_slice(ids),
+             TensorOp::OpBroadcast(_, ids) => LanguageChildren::as_slice(ids),
+@@ -161,6 +171,9 @@ impl Language for TensorOp {
+             TensorOp::Mov(_, ids) => LanguageChildren::as_mut_slice(ids),
+             TensorOp::Gemm(ids) => LanguageChildren::as_mut_slice(ids),
+             TensorOp::Softmax(_, ids) => LanguageChildren::as_mut_slice(ids),
++            TensorOp::AlphaHBM(id) => std::slice::from_mut(id),
++            TensorOp::AlphaD1(id) => std::slice::from_mut(id),
++            TensorOp::AlphaD2(id) => std::slice::from_mut(id),
+             TensorOp::OpAdd(ids) => LanguageChildren::as_mut_slice(ids),
+             TensorOp::OpBitcvt(ids) => LanguageChildren::as_mut_slice(ids),
+             TensorOp::OpBroadcast(_, ids) => LanguageChildren::as_mut_slice(ids),
+@@ -238,6 +251,15 @@ impl FromOp for TensorOp {
+                 let children = <[Id; 1] as LanguageChildren>::from_vec(children);
+                 Ok(TensorOp::Softmax(data.to_string(), children))
+             }
++            op if op == "alpha-hbm" && children.len() == 1 => {
++                Ok(TensorOp::AlphaHBM(children[0]))
++            }
++            op if op == "alpha-d1" && children.len() == 1 => {
++                Ok(TensorOp::AlphaD1(children[0]))
++            }
++            op if op == "alpha-d2" && children.len() == 1 => {
++                Ok(TensorOp::AlphaD2(children[0]))
++            }
+             op if op == "add" && <[Id; 2] as LanguageChildren>::can_be_length(children.len()) => {
+                 let children = <[Id; 2] as LanguageChildren>::from_vec(children);
+                 Ok(TensorOp::OpAdd(children))
+@@ -365,6 +387,9 @@ impl std::fmt::Display for TensorOp {
+             TensorOp::Mov(data, _) => write!(f, "mov[rows='{}']", data),
+             TensorOp::Gemm(_) => write!(f, "gemm"),
+             TensorOp::Softmax(data, _) => write!(f, "softmax[rows='{}']", data),
++            TensorOp::AlphaHBM(_) => write!(f, "alpha_hbm"),
++            TensorOp::AlphaD1(_) => write!(f, "alpha_d1"),
++            TensorOp::AlphaD2(_) => write!(f, "alpha_d2"),
+             TensorOp::OpAdd(_) => write!(f, "add"),
+             TensorOp::OpBitcvt(_) => write!(f, "bitcvt"),
+             TensorOp::OpBroadcast(data, _) => write!(f, "broadcast[dims='{}']", data),
+@@ -417,13 +442,17 @@ impl PartialEq for TensorInfo {
+ impl Analysis<TensorOp> for TensorInfo {
+     type Data = TensorInfo;
+ 
+-    fn make(_egraph: &mut EGraph<TensorOp, Self>, enode: &TensorOp) -> Self::Data {
+-        let mut data = TensorInfo::default();
+-        data.is_const = match enode {
+-            TensorOp::DetectedConst(_) => true,
+-            _ => false,
+-        };
+-        data
++    fn make(egraph: &mut EGraph<TensorOp, Self>, enode: &TensorOp) -> Self::Data {
++        match enode {
++            TensorOp::AlphaHBM(child) | TensorOp::AlphaD1(child) | TensorOp::AlphaD2(child) => {
++                egraph[*child].data.clone()
++            }
++            TensorOp::DetectedConst(_) => TensorInfo {
++                is_const: true,
++                ..TensorInfo::default()
++            },
++            _ => TensorInfo::default(),
++        }
+     }
+ 
+     // TODO: ensure that the two eclasses have the same shape
+diff --git a/targets/QKV/backend/src/isel/extractor/alpha.rs b/targets/QKV/backend/src/isel/extractor/alpha.rs
+new file mode 100644
+index 0000000..add1fb5
+--- /dev/null
++++ b/targets/QKV/backend/src/isel/extractor/alpha.rs
+@@ -0,0 +1,56 @@
++use std::collections::HashMap;
++
++use egg::{CostFunction, EGraph, Extractor, Id, Language, RecExpr};
++
++use crate::ir::egraph::{TensorInfo, TensorOp};
++use crate::ir::pii::PiiGraph;
++use crate::isel::extractor::utils::{get_hbm_offset, recexpr_to_pii};
++
++#[derive(Default)]
++struct UnitCost;
++
++impl CostFunction<TensorOp> for UnitCost {
++    type Cost = usize;
++
++    fn cost<C>(&mut self, enode: &TensorOp, mut costs: C) -> Self::Cost
++    where
++        C: FnMut(Id) -> Self::Cost,
++    {
++        1 + enode.children().iter().map(|id| costs(*id)).sum::<usize>()
++    }
++}
++
++pub fn extract_alpha(
++    egraph: &EGraph<TensorOp, TensorInfo>,
++    root: Id,
++    hbm_offsets: &Vec<(Option<Id>, i32)>,
++) -> Vec<PiiGraph> {
++    let root = egraph.find(root);
++    let mut alpha_roots: Vec<Id> = vec![];
++
++    for en in &egraph[root].nodes {
++        if let TensorOp::AlphaHBM(child) = en {
++            alpha_roots.push(egraph.find(*child));
++        }
++    }
++
++    if alpha_roots.len() > 1 {
++        panic!(
++            "alpha extraction invariant violation: root eclass {:?} contains multiple AlphaHBM nodes after alpha injectivity enforcement",
++            root
++        );
++    }
++
++    let Some(isa_root) = alpha_roots.first().copied() else {
++        println!(
++            "Alpha extractor: root eclass {:?} does not contain AlphaHBM; no PII graph extracted.",
++            root
++        );
++        return vec![];
++    };
++
++    let extractor = Extractor::new(egraph, UnitCost::default());
++    let (_cost, expr) = extractor.find_best(isa_root);
++    vec![recexpr_to_pii(egraph, &expr, hbm_offsets)]
++}
++
+diff --git a/targets/QKV/backend/src/isel/extractor/lib.rs b/targets/QKV/backend/src/isel/extractor/lib.rs
+index f89a165..d72f881 100644
+--- a/targets/QKV/backend/src/isel/extractor/lib.rs
++++ b/targets/QKV/backend/src/isel/extractor/lib.rs
+@@ -6,48 +6,48 @@ use egg::{EGraph, Id};
+ use crate::ir::egraph::{TensorInfo, TensorOp};
+ use crate::ir::pii::PiiGraph;
+ 
+-use crate::isel::extractor::fast::extract_fast;
+-use crate::isel::extractor::slow::extract_slow;
+-
+-use crate::SLOW_LIMIT_CUTOFF;
++use crate::isel::extractor::smoothe::smoothe_extract;
+ 
+ pub fn extract(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     root: Id,
+-    inputs: &HashSet<Id>,
++    _inputs: &HashSet<Id>,
+     hbm_offsets: &Vec<(Option<Id>, i32)>,
+-    limit: usize,
++    _limit: usize,
+ ) -> Vec<PiiGraph> {
+     let nodes = egraph.total_number_of_nodes();
+-
+     let start = Instant::now();
+-    let mut piis_fast = extract_fast(egraph, root, &inputs, &hbm_offsets);
+ 
+-    println!("Fast Extractor Algorithm over #nodes={}", nodes);
+-    println!("Number of PII graphs extracted: {}", piis_fast.len());
+-    println!("Extraction time: {:?}", start.elapsed());
++    let root = egraph.find(root);
++    let mut alpha_roots: Vec<Id> = vec![];
+ 
+-    println!();
++    for en in &egraph[root].nodes {
++        if let TensorOp::AlphaHBM(child) = en {
++            alpha_roots.push(egraph.find(*child));
++        }
++    }
+ 
+-    let mut piis_slow: Vec<PiiGraph> = vec![];
+-    if limit <= SLOW_LIMIT_CUTOFF {
+-        let start = Instant::now();
+-        piis_slow = extract_slow(egraph, root, &inputs, &hbm_offsets, limit);
++    if alpha_roots.len() > 1 {
++        panic!(
++            "SmoothE extractor invariant violation: root eclass {:?} contains multiple AlphaHBM nodes after alpha injectivity enforcement",
++            root
++        );
++    }
+ 
+-        println!("Slow Extractor Algorithm over #nodes={}", nodes);
+-        println!("Limit used: {}", limit);
+-        println!("Number of PII graphs extracted: {}", piis_slow.len());
+-        println!("Extraction time: {:?}", start.elapsed());
+-    } else {
++    let Some(isa_root) = alpha_roots.first().copied() else {
+         println!(
+-            "Skipping Slow Extractor Algorithm (limit = {} > {})",
+-            limit, SLOW_LIMIT_CUTOFF
++            "SmoothE extractor: root eclass {:?} does not contain AlphaHBM; no PII graph extracted.",
++            root
+         );
+-    }
++        return vec![];
++    };
+ 
+-    println!();
++    let piis = vec![smoothe_extract(egraph, isa_root, hbm_offsets)];
+ 
+-    piis_fast.append(&mut piis_slow);
++    println!("SmoothE Extractor over #nodes={}", nodes);
++    println!("Number of PII graphs extracted: {}", piis.len());
++    println!("Extraction time: {:?}", start.elapsed());
++    println!();
+ 
+-    piis_fast
++    piis
+ }
+diff --git a/targets/QKV/backend/src/isel/extractor/mod.rs b/targets/QKV/backend/src/isel/extractor/mod.rs
+index 71d28d0..a811b8b 100644
+--- a/targets/QKV/backend/src/isel/extractor/mod.rs
++++ b/targets/QKV/backend/src/isel/extractor/mod.rs
+@@ -1,6 +1,8 @@
++mod alpha;
+ mod fast;
+ mod lib;
+ mod slow;
+ mod utils;
++mod smoothe;
+ 
+ pub use lib::extract;
+diff --git a/targets/QKV/backend/src/isel/extractor/smoothe.rs b/targets/QKV/backend/src/isel/extractor/smoothe.rs
+new file mode 100644
+index 0000000..929b214
+--- /dev/null
++++ b/targets/QKV/backend/src/isel/extractor/smoothe.rs
+@@ -0,0 +1,207 @@
++use std::collections::{HashMap, HashSet};
++use std::fs;
++use std::path::Path;
++use std::process::Command;
++use std::fmt::Display;
++
++use egg::*;
++use serde_json::Value;
++
++use crate::ir::egraph::{TensorInfo, TensorOp};
++use crate::ir::pii::PiiGraph;
++use crate::isel::extractor::utils::get_hbm_offset;
++
++const SMOOTHE_DIR: &str = "/workspace/smoothe";
++const SMOOTHE_INPUT: &str = "/workspace/egraph.json";
++
++pub fn smoothe_extract(
++    egraph: &mut EGraph<TensorOp, TensorInfo>,
++    root: Id,
++    hbm_offsets: &Vec<(Option<Id>, i32)>,
++) -> PiiGraph {
++    let root = egraph.find(root);
++    let output_dir = Path::new(SMOOTHE_DIR);
++    let input_path = output_dir.join(SMOOTHE_INPUT);
++
++    // Serialize egraph in egraph-serialize / extraction-gym format.
++    let mut serialized_egraph = egg_to_serialized_egraph(egraph);
++    serialized_egraph.root_eclasses = vec![egraph_serialize::ClassId::from(root.to_string())];
++    serialized_egraph
++        .to_json_file(&input_path)
++        .expect("failed to write serialized egraph");
++
++    // Run SmoothE. `src.train` writes `<output_dir>/smoothe_log/<input_stem>_smoothe.json`.
++    let status = Command::new("conda")
++        .arg("run")
++        .arg("--no-capture-output")
++        .arg("-n")
++        .arg("smoothe")
++        .arg("python")
++        .arg("-m")
++        .arg("src.train")
++        .arg("--input_file")
++        .arg(&input_path)
++        .arg("--acyclic")
++        .current_dir(SMOOTHE_DIR)
++        .env("PYTHONPATH", ".")
++        .status()
++        .expect("failed to run SmoothE");
++
++    assert!(status.success(), "SmoothE failed");
++
++    let solution_path = output_dir.join("logs").join("smoothe_log").join("egraph_smoothe.json");
++    let selected = read_smoothe_solution(&solution_path);
++
++    selected_enodes_to_pii(egraph, root, &selected, hbm_offsets)
++}
++
++fn read_smoothe_solution(path: &Path) -> Vec<String> {
++    let data = fs::read_to_string(path)
++        .unwrap_or_else(|err| panic!("failed to read SmoothE solution {:?}: {}", path, err));
++    let json: Value = serde_json::from_str(&data)
++        .unwrap_or_else(|err| panic!("failed to parse SmoothE solution {:?}: {}", path, err));
++
++    json.get("solution")
++        .and_then(|v| v.as_array())
++        .unwrap_or_else(|| panic!("SmoothE solution {:?} does not contain array field `solution`", path))
++        .iter()
++        .map(|v| {
++            v.as_str()
++                .unwrap_or_else(|| panic!("SmoothE solution node id is not a string: {:?}", v))
++                .to_string()
++        })
++        .collect()
++}
++
++fn selected_enodes_to_pii(
++    egraph: &EGraph<TensorOp, TensorInfo>,
++    root: Id,
++    selected_node_ids: &[String],
++    hbm_offsets: &Vec<(Option<Id>, i32)>,
++) -> PiiGraph {
++    let choices = selected_node_ids
++        .iter()
++        .map(|node_id| parse_selected_node_id(egraph, node_id))
++        .collect::<HashMap<Id, usize>>();
++
++    let mut pii = PiiGraph::default();
++    let mut eclass_to_pii: HashMap<Id, usize> = HashMap::new();
++    let mut visiting: HashSet<Id> = HashSet::new();
++
++    build_selected_pii_node(
++        egraph,
++        egraph.find(root),
++        &choices,
++        hbm_offsets,
++        &mut pii,
++        &mut eclass_to_pii,
++        &mut visiting,
++    );
++
++    pii
++}
++
++fn build_selected_pii_node(
++    egraph: &EGraph<TensorOp, TensorInfo>,
++    eclass: Id,
++    choices: &HashMap<Id, usize>,
++    hbm_offsets: &Vec<(Option<Id>, i32)>,
++    pii: &mut PiiGraph,
++    eclass_to_pii: &mut HashMap<Id, usize>,
++    visiting: &mut HashSet<Id>,
++) -> usize {
++    let eclass = egraph.find(eclass);
++    if let Some(&pii_id) = eclass_to_pii.get(&eclass) {
++        return pii_id;
++    }
++    if !visiting.insert(eclass) {
++        panic!("SmoothE selected cyclic extraction involving eclass {:?}", eclass);
++    }
++
++    let node_idx = *choices
++        .get(&eclass)
++        .unwrap_or_else(|| panic!("SmoothE did not select an enode for reachable eclass {:?}", eclass));
++    let op = egraph[eclass]
++        .nodes
++        .get(node_idx)
++        .unwrap_or_else(|| panic!("selected node index {} out of bounds for eclass {:?}", node_idx, eclass))
++        .clone();
++
++    let children = op
++        .children()
++        .iter()
++        .map(|child| {
++            build_selected_pii_node(
++                egraph,
++                egraph.find(*child),
++                choices,
++                hbm_offsets,
++                pii,
++                eclass_to_pii,
++                visiting,
++            )
++        })
++        .collect::<Vec<_>>();
++
++    let pii_id = pii.add_node(
++        op,
++        egraph[eclass].data.clone(),
++        children,
++        get_hbm_offset(hbm_offsets, eclass),
++    );
++    eclass_to_pii.insert(eclass, pii_id);
++    visiting.remove(&eclass);
++
++    pii_id
++}
++
++fn parse_selected_node_id(
++    egraph: &EGraph<TensorOp, TensorInfo>,
++    node_id: &str,
++) -> (Id, usize) {
++    let (class, node_idx) = node_id
++        .rsplit_once('.')
++        .unwrap_or_else(|| panic!("SmoothE selected node id is not `<eclass>.<index>`: {}", node_id));
++    let class = class
++        .parse::<usize>()
++        .unwrap_or_else(|err| panic!("invalid selected eclass id `{}` in `{}`: {}", class, node_id, err));
++    let node_idx = node_idx
++        .parse::<usize>()
++        .unwrap_or_else(|err| panic!("invalid selected node index in `{}`: {}", node_id, err));
++    let eclass = egraph.find(Id::from(class));
++
++    if !egraph[eclass].nodes.get(node_idx).is_some() {
++        panic!("SmoothE selected node `{}` does not exist in egraph", node_id);
++    }
++
++    (eclass, node_idx)
++}
++
++// Copied from https://github.com/egraphs-good/egraph-serialize
++pub fn egg_to_serialized_egraph<L, A>(egraph: &EGraph<L, A>) -> egraph_serialize::EGraph
++where
++    L: Language + Display,
++    A: Analysis<L>,
++{
++    use egraph_serialize::*;
++    let mut out = EGraph::default();
++    for class in egraph.classes() {
++        for (i, node) in class.nodes.iter().enumerate() {
++            out.add_node(
++                format!("{}.{}", class.id, i),
++                Node {
++                    op: node.to_string(),
++                    children: node
++                        .children()
++                        .iter()
++                        .map(|id| NodeId::from(format!("{}.0", egraph.find(*id))))
++                        .collect(),
++                    eclass: ClassId::from(format!("{}", class.id)),
++                    cost: Cost::new(1.0).unwrap(),
++                    subsumed: false,
++                },
++            )
++        }
++    }
++    out
++}
+diff --git a/targets/QKV/backend/src/isel/extractor/utils.rs b/targets/QKV/backend/src/isel/extractor/utils.rs
+index 440743c..74a54ee 100644
+--- a/targets/QKV/backend/src/isel/extractor/utils.rs
++++ b/targets/QKV/backend/src/isel/extractor/utils.rs
+@@ -1,7 +1,8 @@
+ use egg::*;
+-use std::collections::{HashSet, VecDeque};
++use std::collections::{HashSet, VecDeque, HashMap};
+ 
+ use crate::ir::egraph::*;
++use crate::ir::pii::PiiGraph;
+ 
+ /// Worklist algorithm for compile-time detection of constants.
+ /// Marks e-classes as const (updates analysis data), inserts a DetectedConst enode
+@@ -145,3 +146,49 @@ pub fn get_hbm_offset(hbm_offsets: &Vec<(Option<Id>, i32)>, eclass: Id) -> Optio
+     }
+     None
+ }
++
++pub fn recexpr_to_pii(
++    egraph: &EGraph<TensorOp, TensorInfo>,
++    expr: &RecExpr<TensorOp>,
++    hbm_offsets: &Vec<(Option<Id>, i32)>,
++) -> PiiGraph {
++    let mut pii = PiiGraph::default();
++    let mut expr_to_pii: HashMap<Id, usize> = HashMap::new();
++    let mut expr_to_egraph: HashMap<Id, Id> = HashMap::new();
++
++    for (idx, enode) in expr.as_ref().iter().enumerate() {
++        let expr_id = Id::from(idx);
++
++        let mapped_enode = enode.clone().map_children(|child_expr_id| {
++            *expr_to_egraph
++                .get(&child_expr_id)
++                .expect("extracted expression is not in topological order")
++        });
++
++        let eclass = egraph
++            .lookup(mapped_enode.clone())
++            .unwrap_or_else(|| panic!("could not recover eclass for extracted enode: {:?}", mapped_enode));
++        let eclass = egraph.find(eclass);
++        expr_to_egraph.insert(expr_id, eclass);
++
++        let children: Vec<usize> = enode
++            .children()
++            .iter()
++            .map(|child_expr_id| {
++                *expr_to_pii
++                    .get(child_expr_id)
++                    .expect("child PII node missing during RecExpr conversion")
++            })
++            .collect();
++
++        let pii_id = pii.add_node(
++            mapped_enode,
++            egraph[eclass].data.clone(),
++            children,
++            get_hbm_offset(hbm_offsets, eclass),
++        );
++        expr_to_pii.insert(expr_id, pii_id);
++    }
++
++    pii
++}
+diff --git a/targets/QKV/backend/src/isel/initializer/lib.rs b/targets/QKV/backend/src/isel/initializer/lib.rs
+index aa435e5..1cf75ec 100644
+--- a/targets/QKV/backend/src/isel/initializer/lib.rs
++++ b/targets/QKV/backend/src/isel/initializer/lib.rs
+@@ -342,12 +342,14 @@ pub fn add_parameter(
+             },
+         );
+ 
++        let hbm_node = egraph.add(TensorOp::AlphaHBM(var_node));
++
+         let mut shape_with_size = tshape.to_string();
+         if dtype_size != 1 {
+             shape_with_size += &format!(",{}", dtype_size);
+         }
+ 
+-        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [var_node]));
++        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [hbm_node]));
+         let reshape_vec = shape_to_vec(&shape_with_size);
+         egraph.set_analysis_data(
+             node,
+@@ -383,6 +385,8 @@ pub fn add_parameter(
+             },
+         );
+ 
++        let hbm_node = egraph.add(TensorOp::AlphaHBM(var_node));
++
+         let tiled_shape = get_tiled_shape(tshape, ttile);
+ 
+         let mut shape_with_size = tiled_shape.to_string();
+@@ -390,7 +394,7 @@ pub fn add_parameter(
+             shape_with_size += &format!(",{}", dtype_size);
+         }
+ 
+-        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [var_node]));
++        let node = egraph.add(TensorOp::OpReshape(shape_with_size.clone(), [hbm_node]));
+         let reshape_vec = shape_to_vec(&shape_with_size);
+         egraph.set_analysis_data(
+             node,
+diff --git a/targets/QKV/backend/src/isel/rewrites/alpha.rs b/targets/QKV/backend/src/isel/rewrites/alpha.rs
+new file mode 100644
+index 0000000..205d8c9
+--- /dev/null
++++ b/targets/QKV/backend/src/isel/rewrites/alpha.rs
+@@ -0,0 +1,53 @@
++use egg::{EGraph, Id};
++
++use crate::ir::egraph::{TensorInfo, TensorOp};
++
++// TODO(alpha_inv): Remove this hook if/when alpha injectivity is encoded directly
++// in the rewrite system with alpha_inv/projection operators. This hook is a
++// temporary generated-artifact mechanism for enforcing that AlphaD is bijective
++// on values without introducing inverse/projection nodes into ISA e-classes.
++pub fn enforce_alpha_injectivity(egraph: &mut EGraph<TensorOp, TensorInfo>) -> bool {
++    let mut unions: Vec<(Id, Id)> = vec![];
++
++    for class in egraph.classes() {
++        let mut hbm_children: Vec<Id> = vec![];
++        let mut d1_children: Vec<Id> = vec![];
++        let mut d2_children: Vec<Id> = vec![];
++
++        for node in &class.nodes {
++            match node {
++                TensorOp::AlphaHBM(child) => hbm_children.push(egraph.find(*child)),
++                TensorOp::AlphaD1(child) => d1_children.push(egraph.find(*child)),
++                TensorOp::AlphaD2(child) => d2_children.push(egraph.find(*child)),
++                _ => {}
++            }
++        }
++
++        add_child_unions(&mut unions, &hbm_children);
++        add_child_unions(&mut unions, &d1_children);
++        add_child_unions(&mut unions, &d2_children);
++    }
++
++    let mut changed = false;
++    for (a, b) in unions {
++        changed |= egraph.union(a, b);
++    }
++
++    if changed {
++        egraph.rebuild();
++    }
++
++    changed
++}
++
++fn add_child_unions(unions: &mut Vec<(Id, Id)>, children: &[Id]) {
++    let Some((&first, rest)) = children.split_first() else {
++        return;
++    };
++
++    for &child in rest {
++        if child != first {
++            unions.push((first, child));
++        }
++    }
++}
+diff --git a/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.rs b/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.rs
+index 2530cdc..17fd420 100644
+--- a/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.rs
++++ b/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.rs
+@@ -3,216 +3,211 @@ use egg::{EGraph, Id};
+ use crate::ir::dtype::Dtype;
+ use crate::ir::egraph::{TensorInfo, TensorOp};
+ 
++fn set_two_rhs_shapes(
++    egraph: &mut EGraph<TensorOp, TensorInfo>,
++    rhs_eclasses: &Vec<Id>,
++    isa_idx: usize,
++    alpha_idx: usize,
++    info: TensorInfo,
++) {
++    egraph.set_analysis_data(rhs_eclasses[isa_idx], info.clone());
++    egraph.set_analysis_data(rhs_eclasses[alpha_idx], info);
++}
++
+ pub fn precond_load_rm(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 3);
++    assert_eq!(lhs_eclasses.len(), 4);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[2].shape[0];
++    let n = lhs_metadata[3].shape[0];
+ 
+     if lhs_metadata[0] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[1] != (TensorInfo { shape: vec![n, 64, 2], dtype: Dtype::U8, is_const: false, }) {
++    if lhs_metadata[1] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[2] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++    if lhs_metadata[2] != (TensorInfo { shape: vec![n, 64, 2], dtype: Dtype::U8, is_const: false, }) {
++        return false;
++    }
++    if lhs_metadata[3] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+     true
+ }
+ 
+-
+ pub fn metadata_load_rm(
+     egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 3);
++    assert_eq!(lhs_eclasses.len(), 4);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[2].shape[0];
++    let n = lhs_metadata[3].shape[0];
+ 
+-    let mut rhs_metadata = vec![None; 2];
+-    *rhs_metadata.last_mut().unwrap() = Some(n.to_string());
+-    rhs_metadata
++    vec![None, Some(n.to_string()), None]
+ }
+ 
+-
+ pub fn set_shapes_load_rm(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 3);
+-    assert_eq!(rhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 4);
++    assert_eq!(rhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[2].shape[0];
+-
++    let n = lhs_metadata[3].shape[0];
+ 
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 1, 2,
+         TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, });
+-
+ }
+ 
+-
+ pub fn precond_load_cm(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 4);
++    assert_eq!(lhs_eclasses.len(), 5);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[3].shape[0];
++    let n = lhs_metadata[4].shape[0];
+ 
+     if lhs_metadata[0] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[1] != (TensorInfo { shape: vec![n, 64, 2], dtype: Dtype::U8, is_const: false, }) {
++    if lhs_metadata[1] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[2] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++    if lhs_metadata[2] != (TensorInfo { shape: vec![n, 64, 2], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[3] != (TensorInfo { shape: vec![64, n], dtype: Dtype::BF16, is_const: false, }) {
++    if lhs_metadata[3] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++        return false;
++    }
++    if lhs_metadata[4] != (TensorInfo { shape: vec![64, n], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+     true
+ }
+ 
+-
+ pub fn metadata_load_cm(
+     egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 4);
++    assert_eq!(lhs_eclasses.len(), 5);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[3].shape[0];
++    let n = lhs_metadata[4].shape[0];
+ 
+-    let mut rhs_metadata = vec![None; 2];
+-    *rhs_metadata.last_mut().unwrap() = Some(n.to_string());
+-    rhs_metadata
++    vec![None, Some(n.to_string()), None]
+ }
+ 
+-
+ pub fn set_shapes_load_cm(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 4);
+-    assert_eq!(rhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 5);
++    assert_eq!(rhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[3].shape[0];
++    let n = lhs_metadata[4].shape[0];
+ 
+-
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 1, 2,
+         TensorInfo { shape: vec![64, n], dtype: Dtype::BF16, is_const: false, });
+-
+ }
+ 
+-
+ pub fn precond_store_rm(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 3);
++    assert_eq!(lhs_eclasses.len(), 4);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[2].shape[0] / 128;
++    let n = lhs_metadata[3].shape[0] / 128;
+ 
+     if lhs_metadata[0] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[1] != (TensorInfo { shape: vec![n, 64, 2], dtype: Dtype::U8, is_const: false, }) {
++    if lhs_metadata[1] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++        return false;
++    }
++    if lhs_metadata[2] != (TensorInfo { shape: vec![n, 64, 2], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[2] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
++    if lhs_metadata[3] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+     true
+ }
+ 
+-
+ pub fn metadata_store_rm(
+     egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 3);
++    assert_eq!(lhs_eclasses.len(), 4);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[2].shape[0] / 128;
++    let n = lhs_metadata[3].shape[0] / 128;
+ 
+-    let mut rhs_metadata = vec![None; 2];
+-    *rhs_metadata.last_mut().unwrap() = Some(n.to_string());
+-    rhs_metadata
++    vec![None, Some(n.to_string()), None]
+ }
+ 
+-
+ pub fn set_shapes_store_rm(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 3);
+-    assert_eq!(rhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 4);
++    assert_eq!(rhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[2].shape[0] / 128;
+-
++    let n = lhs_metadata[3].shape[0] / 128;
+ 
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 1, 2,
+         TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, });
+-
+ }
+ 
+-
+ pub fn precond_store_cm(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 4);
++    assert_eq!(lhs_eclasses.len(), 5);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[3].shape[0] / 128;
++    let n = lhs_metadata[4].shape[0] / 128;
+ 
+     if lhs_metadata[0] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[1] != (TensorInfo { shape: vec![64, n], dtype: Dtype::BF16, is_const: false, }) {
++    if lhs_metadata[1] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[2] != (TensorInfo { shape: vec![64, n, 2], dtype: Dtype::U8, is_const: false, }) {
++    if lhs_metadata[2] != (TensorInfo { shape: vec![64, n], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[3] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
++    if lhs_metadata[3] != (TensorInfo { shape: vec![64, n, 2], dtype: Dtype::U8, is_const: false, }) {
++        return false;
++    }
++    if lhs_metadata[4] != (TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, }) {
+         return false;
+     }
+     true
+ }
+ 
+-
+ pub fn metadata_store_cm(
+     egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 4);
++    assert_eq!(lhs_eclasses.len(), 5);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[3].shape[0] / 128;
++    let n = lhs_metadata[4].shape[0] / 128;
+ 
+-    let mut rhs_metadata = vec![None; 2];
+-    *rhs_metadata.last_mut().unwrap() = Some(n.to_string());
+-    rhs_metadata
++    vec![None, Some(n.to_string()), None]
+ }
+ 
+-
+ pub fn set_shapes_store_cm(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 4);
+-    assert_eq!(rhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 5);
++    assert_eq!(rhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[3].shape[0] / 128;
++    let n = lhs_metadata[4].shape[0] / 128;
+ 
+-
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 1, 2,
+         TensorInfo { shape: vec![n*128], dtype: Dtype::U8, is_const: false, });
+-
+ }
+ 
+-
+ pub fn precond_mov(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[1].shape[0];
++    let n = lhs_metadata[2].shape[0];
+ 
+     if lhs_metadata[0] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+@@ -220,92 +215,76 @@ pub fn precond_mov(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>
+     if lhs_metadata[1] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
++    if lhs_metadata[2] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++        return false;
++    }
+     true
+ }
+ 
+-
+ pub fn metadata_mov(
+     egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[1].shape[0];
++    let n = lhs_metadata[2].shape[0];
+ 
+-    let mut rhs_metadata = vec![None; 2];
+-    *rhs_metadata.last_mut().unwrap() = Some(n.to_string());
+-    rhs_metadata
++    vec![None, Some(n.to_string()), None]
+ }
+ 
+-
+ pub fn set_shapes_mov(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 2);
+-    assert_eq!(rhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 3);
++    assert_eq!(rhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[1].shape[0];
+-
++    let n = lhs_metadata[2].shape[0];
+ 
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 1, 2,
+         TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, });
+-
+ }
+ 
+-
+ pub fn precond_gemm(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 3);
++    assert_eq!(lhs_eclasses.len(), 5);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+ 
+-    if lhs_metadata[0] != (TensorInfo { shape: vec![64, 64], dtype: Dtype::BF16, is_const: false, }) {
+-        return false;
+-    }
+-    if lhs_metadata[1] != (TensorInfo { shape: vec![64, 64], dtype: Dtype::BF16, is_const: false, }) {
+-        return false;
+-    }
+-    if lhs_metadata[2] != (TensorInfo { shape: vec![64, 64], dtype: Dtype::BF16, is_const: false, }) {
+-        return false;
++    for info in lhs_metadata.iter() {
++        if *info != (TensorInfo { shape: vec![64, 64], dtype: Dtype::BF16, is_const: false, }) {
++            return false;
++        }
+     }
+     true
+ }
+ 
+-
+ pub fn metadata_gemm(
+-    egraph: &EGraph<TensorOp, TensorInfo>,
++    _egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 3);
+-    let _lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
++    assert_eq!(lhs_eclasses.len(), 5);
+ 
+-    let rhs_metadata = vec![None; 3];
+-    rhs_metadata
++    vec![None; 4]
+ }
+ 
+-
+ pub fn set_shapes_gemm(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 3);
+-    assert_eq!(rhs_eclasses.len(), 3);
+-    let _lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
++    assert_eq!(lhs_eclasses.len(), 5);
++    assert_eq!(rhs_eclasses.len(), 4);
+ 
+-
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 2, 3,
+         TensorInfo { shape: vec![64, 64], dtype: Dtype::BF16, is_const: false, });
+-
+ }
+ 
+-
+ pub fn precond_softmax(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec<Id>) -> bool {
+-    assert_eq!(lhs_eclasses.len(), 7);
++    assert_eq!(lhs_eclasses.len(), 9);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[6].shape[0];
++    let n = lhs_metadata[8].shape[0];
+ 
+     if lhs_metadata[0] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+@@ -319,49 +298,47 @@ pub fn precond_softmax(egraph: &EGraph<TensorOp, TensorInfo>, lhs_eclasses: &Vec
+     if lhs_metadata[3] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[4] != (TensorInfo { shape: vec![n], dtype: Dtype::BF16, is_const: false, }) {
++    if lhs_metadata[4] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+     if lhs_metadata[5] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+-    if lhs_metadata[6] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++    if lhs_metadata[6] != (TensorInfo { shape: vec![n], dtype: Dtype::BF16, is_const: false, }) {
++        return false;
++    }
++    if lhs_metadata[7] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
++        return false;
++    }
++    if lhs_metadata[8] != (TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, }) {
+         return false;
+     }
+     true
+ }
+ 
+-
+ pub fn metadata_softmax(
+     egraph: &EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     _lhs_enodes: &Vec<Option<TensorOp>>,
+ ) -> Vec<Option<String>> {
+-    assert_eq!(lhs_eclasses.len(), 7);
++    assert_eq!(lhs_eclasses.len(), 9);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[6].shape[0];
++    let n = lhs_metadata[8].shape[0];
+ 
+-    let mut rhs_metadata = vec![None; 2];
+-    *rhs_metadata.last_mut().unwrap() = Some(n.to_string());
+-    rhs_metadata
++    vec![None, Some(n.to_string()), None]
+ }
+ 
+-
+ pub fn set_shapes_softmax(
+     egraph: &mut EGraph<TensorOp, TensorInfo>,
+     lhs_eclasses: &Vec<Id>,
+     rhs_eclasses: &Vec<Id>,
+ ) {
+-    assert_eq!(lhs_eclasses.len(), 7);
+-    assert_eq!(rhs_eclasses.len(), 2);
++    assert_eq!(lhs_eclasses.len(), 9);
++    assert_eq!(rhs_eclasses.len(), 3);
+     let lhs_metadata: Vec<TensorInfo> = lhs_eclasses.iter().map(|id| egraph[*id].data.clone()).collect();
+-    let n = lhs_metadata[6].shape[0];
+-
++    let n = lhs_metadata[8].shape[0];
+ 
+-    egraph.set_analysis_data(*rhs_eclasses.last().unwrap(),
++    set_two_rhs_shapes(egraph, rhs_eclasses, 1, 2,
+         TensorInfo { shape: vec![n, 64], dtype: Dtype::BF16, is_const: false, });
+-
+ }
+ 
+-
+-
+diff --git a/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.txt b/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.txt
+index 03e9c37..433e0b6 100644
+--- a/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.txt
++++ b/targets/QKV/backend/src/isel/rewrites/ir2isa_rewrites.txt
+@@ -1,7 +1,7 @@
+-load-rm:             (bitcvt (reshape_? ?a)) => (load-rm_? ?a)
+-load-cm:             (transpose_? (bitcvt (reshape_? ?a))) => (load-cm_? ?a)
+-store-rm:            (reshape_? (bitcvt ?a)) => (store-rm_? ?a)
+-store-cm:            (reshape_? (bitcvt (transpose_? ?a))) => (store-cm_? ?a)
+-mov:                 (copy ?a) => (mov_? ?a)
+-gemm:                (dot ?a ?b) => (gemm ?a ?b)
+-softmax:             (divide (exponential ?b) (broadcast_? (reduce_? (exponential ?a)))) => (softmax_? ?a)
++load-rm:             (bitcvt (reshape_? (alpha-hbm ?a))) => (alpha-d1 (load-rm_? ?a))
++load-cm:             (transpose_? (bitcvt (reshape_? (alpha-hbm ?a)))) => (alpha-d1 (load-cm_? ?a))
++store-rm:            (reshape_? (bitcvt (alpha-d1 ?a))) => (alpha-hbm (store-rm_? ?a))
++store-cm:            (reshape_? (bitcvt (transpose_? (alpha-d1 ?a)))) => (alpha-hbm (store-cm_? ?a))
++mov:                 (copy (alpha-d2 ?a)) => (alpha-d1 (mov_? ?a))
++gemm:                (dot (alpha-d1 ?a) (alpha-d1 ?b)) => (alpha-d2 (gemm ?a ?b))
++softmax:             (divide (exponential (alpha-d2 ?b)) (broadcast_? (reduce_? (exponential (alpha-d2 ?a))))) => (alpha-d2 (softmax_? ?a))
+diff --git a/targets/QKV/backend/src/isel/rewrites/mod.rs b/targets/QKV/backend/src/isel/rewrites/mod.rs
+index 3f62120..f8b3583 100644
+--- a/targets/QKV/backend/src/isel/rewrites/mod.rs
++++ b/targets/QKV/backend/src/isel/rewrites/mod.rs
+@@ -1,6 +1,8 @@
++mod alpha;
+ mod applier;
+ mod ir2ir_rewrites;
+ mod ir2isa_rewrites;
+ mod lib;
+ 
++pub use alpha::enforce_alpha_injectivity;
+ pub use lib::get_rewrites;
+diff --git a/targets/QKV/backend/src/pipeline.rs b/targets/QKV/backend/src/pipeline.rs
+index 2b32926..f351e86 100644
+--- a/targets/QKV/backend/src/pipeline.rs
++++ b/targets/QKV/backend/src/pipeline.rs
+@@ -304,6 +304,10 @@ fn main() {
+             .with_time_limit(TIME_LIMIT)
+             .with_hook(move |runner| {
+                 PROCESSED.lock().unwrap().clear();
++                if isel::rewrites::enforce_alpha_injectivity(&mut runner.egraph) {
++                    println!("Applied alpha injectivity unions");
++                    println!();
++                }
+                 if runner.iterations.len() % N == 0 && runner.iterations.len() > 0 {
+                     check_termination(best.borrow().clone(), &start, &output_path_for_hook);
+                     println!(
